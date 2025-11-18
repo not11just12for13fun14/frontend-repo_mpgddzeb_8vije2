@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Sparkles, Send, Gauge, Wand2, Loader2, AlertTriangle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Sparkles, Send, Gauge, Wand2, Loader2, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
 
 const electricBlue = '#2563eb'
 
@@ -10,29 +10,72 @@ export default function Hero() {
   const [reasons, setReasons] = useState([])
   const [improved, setImproved] = useState('')
   const [error, setError] = useState(null)
-  const backend = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+  const [health, setHealth] = useState({ status: 'checking', openai: 'unknown' })
+  const backend = useMemo(() => import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000', [])
+
+  // Simple fetch with timeout helper (better for mobile flaky networks)
+  const fetchWithTimeout = async (url, options = {}, timeoutMs = 20000) => {
+    const controller = new AbortController()
+    const id = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal })
+      return res
+    } finally {
+      clearTimeout(id)
+    }
+  }
+
+  const checkHealth = async () => {
+    try {
+      const res = await fetchWithTimeout(`${backend}/health`, { method: 'GET' }, 8000)
+      if (!res.ok) throw new Error('health not ok')
+      const data = await res.json()
+      setHealth({ status: 'ok', openai: data?.openai || 'unknown' })
+    } catch {
+      setHealth({ status: 'down', openai: 'unknown' })
+    }
+  }
+
+  useEffect(() => {
+    checkHealth()
+    const t = setInterval(checkHealth, 20000)
+    return () => clearInterval(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const analyze = async () => {
     if (!message.trim()) return
-    try {
-      setLoading(true)
-      setError(null)
-      setScore(null)
-      setReasons([])
-      setImproved('')
-      const res = await fetch(`${backend}/analyze`, {
+    setLoading(true)
+    setError(null)
+    setScore(null)
+    setReasons([])
+    setImproved('')
+
+    const body = JSON.stringify({ message })
+
+    // Try once, then one retry on mobile-ish transient errors
+    const attempt = async () => {
+      return fetchWithTimeout(`${backend}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
-      })
+        body,
+      }, 25000)
+    }
 
-      // Surface non-200 errors to the UI
+    try {
+      let res = await attempt()
+
+      // Retry on gateway/timeouts typical on mobile networks
+      if (!res.ok && [502, 503, 504].includes(res.status)) {
+        res = await attempt()
+      }
+
       if (!res.ok) {
         let detail = ''
         try {
           const errData = await res.json()
           detail = errData?.detail || ''
-        } catch (_) {}
+        } catch (e) {}
         throw new Error(detail || `Analyzer returned ${res.status}`)
       }
 
@@ -41,12 +84,29 @@ export default function Hero() {
       setReasons(Array.isArray(data.reasons) ? data.reasons : [])
       setImproved(typeof data.improved === 'string' ? data.improved : '')
     } catch (e) {
-      const msg = e?.message || 'Analyzer is temporarily unavailable. Please try again.'
+      const msg = e?.name === 'AbortError'
+        ? 'Network timeout on mobile. Please try again on a stronger connection.'
+        : (e?.message || 'Analyzer is temporarily unavailable. Please try again.')
       setError(msg)
     } finally {
       setLoading(false)
     }
   }
+
+  const HealthBadge = () => (
+    <div className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-black/60 px-3 py-1 text-xs text-slate-300 shadow-sm">
+      {health.status === 'ok' ? (
+        <Wifi className="h-3.5 w-3.5 text-emerald-400" />
+      ) : health.status === 'checking' ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
+      ) : (
+        <WifiOff className="h-3.5 w-3.5 text-rose-400" />
+      )}
+      <span>
+        {health.status === 'ok' ? `Backend connected (${health.openai === 'set' ? 'OpenAI: live' : 'OpenAI: missing'})` : health.status === 'checking' ? 'Checking backend…' : 'Backend unreachable'}
+      </span>
+    </div>
+  )
 
   return (
     <section className="relative overflow-hidden">
@@ -79,9 +139,12 @@ export default function Hero() {
       {/* hero content */}
       <div className="max-w-7xl mx-auto px-6 py-16 md:py-24 grid md:grid-cols-2 gap-12 items-center">
         <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-black px-3 py-1 text-xs text-slate-300 shadow-sm">
-            <Gauge className="h-3.5 w-3.5 text-blue-400" />
-            Real-time LinkedIn outreach analyzer
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-black px-3 py-1 text-xs text-slate-300 shadow-sm">
+              <Gauge className="h-3.5 w-3.5 text-blue-400" />
+              Real-time LinkedIn outreach analyzer
+            </div>
+            <HealthBadge />
           </div>
           <h1 className="mt-5 text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-white">
             Predict Your LinkedIn Reply Rate Before You Hit Send
@@ -121,7 +184,7 @@ export default function Hero() {
               />
 
               {/* analyze button + error */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <button onClick={analyze} disabled={loading || !message.trim()} className="justify-center inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white font-semibold shadow-lg shadow-blue-600/30 hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
                   {loading ? (
                     <>
