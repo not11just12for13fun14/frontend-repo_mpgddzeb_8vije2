@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sparkles, Send, Gauge, Wand2 } from 'lucide-react'
+import { Sparkles, Send, Gauge, Wand2, Loader2, AlertTriangle } from 'lucide-react'
 
 const electricBlue = '#2563eb'
 
@@ -9,12 +9,14 @@ export default function Hero() {
   const [score, setScore] = useState(null)
   const [reasons, setReasons] = useState([])
   const [improved, setImproved] = useState('')
+  const [error, setError] = useState(null)
   const backend = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
   const analyze = async () => {
     if (!message.trim()) return
     try {
       setLoading(true)
+      setError(null)
       setScore(null)
       setReasons([])
       setImproved('')
@@ -23,14 +25,24 @@ export default function Hero() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message })
       })
+
+      // Surface non-200 errors to the UI
+      if (!res.ok) {
+        let detail = ''
+        try {
+          const errData = await res.json()
+          detail = errData?.detail || ''
+        } catch (_) {}
+        throw new Error(detail || `Analyzer returned ${res.status}`)
+      }
+
       const data = await res.json()
-      setScore(data.score)
-      setReasons(data.reasons || [])
-      setImproved(data.improved || '')
+      setScore(typeof data.score === 'number' ? data.score : null)
+      setReasons(Array.isArray(data.reasons) ? data.reasons : [])
+      setImproved(typeof data.improved === 'string' ? data.improved : '')
     } catch (e) {
-      setScore(70)
-      setReasons(['Temporary issue. Please try again.'])
-      setImproved('Refocus on the recipient\'s outcome, personalize one detail, and propose a low‑lift next step (e.g., a 7‑minute async walkthrough).')
+      const msg = e?.message || 'Analyzer is temporarily unavailable. Please try again.'
+      setError(msg)
     } finally {
       setLoading(false)
     }
@@ -108,27 +120,51 @@ export default function Hero() {
                 placeholder="Paste a LinkedIn DM, InMail, or connection message..."
               />
 
-              <button onClick={analyze} disabled={loading || !message.trim()} className="justify-center inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white font-semibold shadow-lg shadow-blue-600/30 hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
-                {loading ? 'Analyzing…' : 'Analyze'}
-              </button>
+              {/* analyze button + error */}
+              <div className="flex items-center gap-3">
+                <button onClick={analyze} disabled={loading || !message.trim()} className="justify-center inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white font-semibold shadow-lg shadow-blue-600/30 hover:bg-blue-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Analyzing…
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-4 w-4" />
+                      Analyze
+                    </>
+                  )}
+                </button>
+                {error && (
+                  <div className="inline-flex items-center gap-2 rounded-lg border border-rose-700/40 bg-rose-900/20 px-3 py-2 text-rose-300 text-sm">
+                    <AlertTriangle className="h-4 w-4 text-rose-400" />
+                    <span>{error}</span>
+                  </div>
+                )}
+              </div>
 
               {/* score + reasons */}
               <div className="grid md:grid-cols-3 gap-4">
-                <div className="col-span-1 rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-black p-4">
+                <div className="col-span-1 rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-black p-4 min-h-[96px]">
                   <p className="text-xs uppercase tracking-wide text-slate-400">Predicted Reply Chance</p>
                   <div className="mt-2 flex items-end gap-2">
-                    <span className="text-4xl font-extrabold" style={{color: electricBlue}}>{score ?? '—'}{typeof score === 'number' ? '%' : ''}</span>
+                    <span className="text-4xl font-extrabold" style={{color: electricBlue}}>
+                      {loading && score === null ? '…' : (score ?? '—')}
+                    </span>
                     {typeof score === 'number' && (
                       <span className={`text-xs font-semibold ${score >= 70 ? 'text-emerald-400' : score >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
                         {score >= 70 ? 'Good' : score >= 40 ? 'Okay' : 'Low'}
                       </span>
                     )}
+                    {typeof score === 'number' && <span className="text-slate-400 ml-1 mb-[2px]">%</span>}
                   </div>
                 </div>
-                <div className="col-span-2 rounded-xl border border-slate-800 bg-slate-900 p-4">
+                <div className="col-span-2 rounded-xl border border-slate-800 bg-slate-900 p-4 min-h-[96px]">
                   <p className="text-xs uppercase tracking-wide text-slate-400">Why your score isn’t higher</p>
                   <ul className="mt-2 text-sm text-slate-200 list-disc list-inside space-y-1 min-h-[60px]">
-                    {reasons && reasons.length > 0 ? (
+                    {loading ? (
+                      <li className="text-slate-500">Analyzing your message…</li>
+                    ) : reasons && reasons.length > 0 ? (
                       reasons.map((r, i) => <li key={i}>{r}</li>)
                     ) : (
                       <li className="text-slate-500">Enter a message and tap Analyze</li>
@@ -144,7 +180,7 @@ export default function Hero() {
                   Improved version
                 </div>
                 <p className="mt-2 text-slate-200 text-sm min-h-[60px]">
-                  {improved || 'Your improved message will appear here.'}
+                  {loading ? 'Generating an improved version…' : (improved || 'Your improved message will appear here.')}
                 </p>
               </div>
             </div>
